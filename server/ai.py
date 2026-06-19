@@ -131,7 +131,7 @@ class AIStream(CameraStream):
         # detección desacoplada del vivo (anti-lag)
         self.live_fps = 12                # vivo fluido
         self.live_width = 480             # vivo más chico -> sube más rápido
-        self.live_quality = 50
+        self.live_quality = 58            # color a 480px ~18-20KB/frame: ligero para WiFi
         self.detect_dt = 0.2              # detección ~5 fps en su propio hilo
         self._latest = None
         self._latest_lock = threading.Lock()
@@ -158,7 +158,7 @@ class AIStream(CameraStream):
         self._last_face_ts = 0.0
         self._cap_last = 0.0
         self._win_last = 0.0
-        self._win: list = []              # frames gris muestreados (rolling) para el collage
+        self._win: list = []              # frames color muestreados (rolling) para el collage
         self._activity_start = 0.0
         self._wa_last = 0.0
 
@@ -183,7 +183,7 @@ class AIStream(CameraStream):
 
     # ----------------------------------------------------------- helpers
     def _collage(self, frames):
-        """Collage 2x2 con las 4 fotos MÁS RECIENTES (gris). Si hay menos de 4,
+        """Collage 2x2 con las 4 fotos MÁS RECIENTES (color). Si hay menos de 4,
         repite la última para NO dejar celdas en negro."""
         sel = list(frames)[-4:]
         if not sel:
@@ -436,10 +436,10 @@ class AIStream(CameraStream):
                 self._win_last = 0.0
                 self._win = []
                 self._wa_last = 0.0
-            # muestreo en memoria para el collage (4 fotos, todas con >=2 rostros)
+            # muestreo en memoria para el collage (4 fotos COLOR, todas con >=2 rostros)
             if now - self._win_last >= self.win_sample:
                 self._win_last = now
-                self._win.append(cv2.cvtColor(full, cv2.COLOR_BGR2GRAY))
+                self._win.append(full.copy())
                 self._win = self._win[-6:]
             eff_cd = self.cooldown
             if self.cloud and getattr(self.cloud, "interval", None):
@@ -458,12 +458,11 @@ class AIStream(CameraStream):
                 self._burst = None
                 self._win = []
 
-    # ---- HILO PRINCIPAL: vivo fluido (gris + cajas en caché) ----
+    # ---- HILO PRINCIPAL: vivo fluido (COLOR + cajas en caché) ----
     def _render_live(self, full):
         small = self._small(full)
         VERDE = (20, 255, 57)   # verde fosforescente
-        gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
-        live = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+        live = small.copy()     # color real; .copy() -> no dibujar sobre el frame de detección
         for (x1, y1, x2, y2) in self._last_faces:
             cv2.rectangle(live, (x1, y1), (x2, y2), VERDE, 2)
         cv2.putText(live, f"Rostros: {self.people}", (10, 22),
