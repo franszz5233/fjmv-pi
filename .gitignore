@@ -1,0 +1,4 @@
+config.json
+captures/
+server/models/*.caffemodel
+__pycache__/

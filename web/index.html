@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, user-scalable=no" />
+  <meta name="theme-color" content="#0b0d14" />
+  <title>Cam AI · FJMV</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">Cam <b>AI</b></div>
+    <div class="live">
+      <span id="people" class="chip">👤 0</span>
+      <span id="together" class="chip off">2 juntas</span>
+      <span id="status" class="dot" title="conexión"></span>
+    </div>
+  </header>
+
+  <main class="layout">
+    <!-- Panel izquierdo: eventos / capturas -->
+    <aside id="panel" class="panel">
+      <h2>Detecciones <span id="evCount" class="count">0</span></h2>
+      <div id="events" class="events">
+        <p class="empty">Aún sin detecciones de “2 personas juntas”.</p>
+      </div>
+    </aside>
+
+    <!-- Vista de cámara -->
+    <section class="stage">
+      <div class="videowrap">
+        <img id="cam" alt="cámara" />
+      </div>
+
+      <div class="ptz">
+        <button data-act="up">▲</button>
+        <div class="row">
+          <button data-act="left">◄</button>
+          <button data-act="stop" class="stop">■</button>
+          <button data-act="right">►</button>
+        </div>
+        <button data-act="down">▼</button>
+        <div class="zoom">
+          <button data-act="zoom_out">−</button>
+          <button data-act="zoom_in">+</button>
+        </div>
+      </div>
+      <div id="ptzMsg" class="msg"></div>
+    </section>
+  </main>
+
+  <!-- Visor de captura -->
+  <dialog id="viewer">
+    <img id="viewerImg" alt="captura" />
+    <div class="vmeta"><span id="viewerInfo"></span><button id="viewerClose">Cerrar</button></div>
+  </dialog>
+
+  <script src="/app.js"></script>
+</body>
+</html>
