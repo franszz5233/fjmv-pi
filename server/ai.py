@@ -67,14 +67,14 @@ def discover_camera(template_url):
 
     def open554(ip):
         try:
-            s = socket.create_connection((ip, 554), timeout=0.4)
+            s = socket.create_connection((ip, 554), timeout=1.5)
             s.close()
             return ip
         except Exception:
             return None
 
     cands = []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=80) as ex:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=40) as ex:
         for r in ex.map(open554, [f"{base}.{i}" for i in range(1, 255)]):
             if r:
                 cands.append(r)
