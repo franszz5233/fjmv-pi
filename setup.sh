@@ -21,6 +21,9 @@ cd "$REPO_DIR"
 echo "==== FJMV-PI setup · repo=$REPO_DIR · cam=$CAM_IP ===="
 
 export DEBIAN_FRONTEND=noninteractive
+# Arreglo llave GPG de Kali (imágenes viejas traen la llave expirada -> apt falla)
+curl -fsSL https://archive.kali.org/archive-keyring.gpg \
+  -o /usr/share/keyrings/kali-archive-keyring.gpg 2>/dev/null || true
 apt-get update -y
 apt-get install -y python3 python3-pip python3-opencv python3-numpy \
     python3-requests git curl net-tools wireless-tools \
