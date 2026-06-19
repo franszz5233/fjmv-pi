@@ -48,6 +48,8 @@ cat > /etc/dnsmasq.d/fjmv.conf <<EOF
 interface=$AP_IF
 bind-interfaces
 dhcp-range=10.66.0.10,10.66.0.200,12h
+server=8.8.8.8
+server=1.1.1.1
 EOF
 
 echo 'net.ipv4.ip_forward=1' > /etc/sysctl.d/99-fjmv.conf
@@ -62,6 +64,7 @@ ip link set $AP_IF up 2>/dev/null || true
 iptables -t nat -C POSTROUTING -o "\$NET_IF" -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -o "\$NET_IF" -j MASQUERADE
 iptables -C FORWARD -i $AP_IF -o "\$NET_IF" -j ACCEPT 2>/dev/null || iptables -A FORWARD -i $AP_IF -o "\$NET_IF" -j ACCEPT
 iptables -C FORWARD -i "\$NET_IF" -o $AP_IF -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || iptables -A FORWARD -i "\$NET_IF" -o $AP_IF -m state --state RELATED,ESTABLISHED -j ACCEPT
+iptables -t mangle -C FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || iptables -t mangle -A FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
 EOF
 chmod +x /usr/local/sbin/fjmv-nat.sh
 
