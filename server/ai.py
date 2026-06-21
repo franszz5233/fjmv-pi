@@ -162,6 +162,38 @@ class AIStream(CameraStream):
         self._activity_start = 0.0
         self._wa_last = 0.0
 
+        self._apply_lite()
+
+    # --------------------------------------------------- modo ligero (Zero 2 W)
+    def _ram_mb(self):
+        try:
+            with open("/proc/meminfo") as f:
+                for ln in f:
+                    if ln.startswith("MemTotal"):
+                        return int(ln.split()[1]) // 1024
+        except Exception:
+            pass
+        return 9999
+
+    def _apply_lite(self):
+        """Auto en equipos con poca RAM (Raspberry Pi Zero 2 W = 512MB):
+        baja resolución/fps y usa el SUBSTREAM de la cámara (subtype=1 ~ H.264,
+        mucho menos CPU para decodificar). Forzar con FJMV_LITE=1/0."""
+        env = os.environ.get("FJMV_LITE", "")
+        lite = (env == "1") or (env != "0" and self._ram_mb() < 700)
+        if not lite:
+            return
+        self.proc_width = min(self.proc_width, 416)
+        self.live_fps = 6
+        self.live_width = 384
+        self.live_quality = 55
+        self.detect_dt = 0.5              # detección ~2 fps (suficiente para contar rostros)
+        # cámara: pasar al substream (más liviano). discover_camera conserva el subtype.
+        if self.url and "subtype=0" in self.url:
+            self.url = self.url.replace("subtype=0", "subtype=1")
+        print(f"  [IA] MODO LIGERO ON (RAM~{self._ram_mb()}MB): proc={self.proc_width} "
+              f"live={self.live_width}@{self.live_fps}fps substream")
+
     # ----------------------------------------------------------- modelos
     def _init_models(self):
         # Detector de ROSTROS (OpenCV DNN, res10 SSD)
