@@ -144,6 +144,9 @@ class AIStream(CameraStream):
         self._watchdog_secs = 90          # si el bucle no respira en 90s -> reinicia proceso
         self._health = {}                 # telemetría (temp, throttle, mem, wifi, uptime)
         self._health_ts = 0.0
+        self.lite = False                 # modo ligero (Zero 2 W) -> lo activa _apply_lite
+        self.detect_w = 416               # tamaño del blob de detección (res10)
+        self.grab_sleep = 0.02
 
         # ---- nube ----
         self.cloud = None
@@ -188,16 +191,21 @@ class AIStream(CameraStream):
         lite = (env == "1") or (env != "0" and self._ram_mb() < 700)
         if not lite:
             return
-        self.proc_width = min(self.proc_width, 416)
-        self.live_fps = 6
-        self.live_width = 384
+        self.lite = True
+        # Zero 2 W es débil: detección poco frecuente + chica + sin cascada de perfil.
+        self.proc_width = min(self.proc_width, 320)
+        self.live_fps = 4
+        self.live_width = 360
         self.live_quality = 55
-        self.detect_dt = 0.5              # detección ~2 fps (suficiente para contar rostros)
+        self.detect_dt = 1.5             # detección ~0.7 fps (basta para "hay 2+ personas")
+        self.detect_w = 300             # blob res10 más chico (300 vs 416) -> mucho menos CPU
+        self.grab_sleep = 0.06          # no spinear el bucle de captura
         # cámara: pasar al substream (más liviano). discover_camera conserva el subtype.
         if self.url and "subtype=0" in self.url:
             self.url = self.url.replace("subtype=0", "subtype=1")
         print(f"  [IA] MODO LIGERO ON (RAM~{self._ram_mb()}MB): proc={self.proc_width} "
-              f"live={self.live_width}@{self.live_fps}fps substream")
+              f"live={self.live_width}@{self.live_fps}fps detect/{self.detect_dt}s substream",
+              flush=True)
 
     # ----------------------------------------------------------- modelos
     def _init_models(self):
@@ -259,9 +267,10 @@ class AIStream(CameraStream):
             return []
         h, w = bgr.shape[:2]
         boxes = []
-        # frontales (DNN res10, blob 416)
-        blob = cv2.dnn.blobFromImage(cv2.resize(bgr, (416, 416)), 1.0,
-                                     (416, 416), (104.0, 177.0, 123.0))
+        # frontales (DNN res10). blob configurable (300 en lite -> mucho menos CPU)
+        bw = self.detect_w
+        blob = cv2.dnn.blobFromImage(cv2.resize(bgr, (bw, bw)), 1.0,
+                                     (bw, bw), (104.0, 177.0, 123.0))
         self._face_net.setInput(blob)
         det = self._face_net.forward()
         for i in range(det.shape[2]):
@@ -272,8 +281,8 @@ class AIStream(CameraStream):
             x1, y1 = max(0, x1), max(0, y1); x2, y2 = min(w, x2), min(h, y2)
             if x2 > x1 and y2 > y1:
                 boxes.append((x1, y1, x2, y2))
-        # de PERFIL (ambos lados) con cascada Haar
-        if self._profile is not None:
+        # de PERFIL (ambos lados) con cascada Haar — se omite en modo ligero (caro)
+        if self._profile is not None and not self.lite:
             gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
             for (x, y, ww, hh) in self._profile.detectMultiScale(gray, 1.2, 6, minSize=(44, 44)):
                 boxes.append((x, y, x + ww, y + hh))
@@ -500,7 +509,7 @@ class AIStream(CameraStream):
                     fails += 1
                     if fails > 30:
                         break
-                    time.sleep(0.02); continue
+                    time.sleep(self.grab_sleep); continue
                 fails = 0
                 self._alive_ts = time.time()  # vida: llegan frames de la cámara
                 now = time.time()

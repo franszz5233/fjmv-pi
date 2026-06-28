@@ -53,6 +53,45 @@ systemctl restart NetworkManager 2>/dev/null || true
 sleep 3
 /usr/local/sbin/fjmv-wifipower.sh
 
+echo "[*] Anti disco-lleno: journald acotado + recorte de logs gigantes..."
+mkdir -p /etc/systemd/journald.conf.d
+printf '[Journal]\nSystemMaxUse=40M\nRuntimeMaxUse=20M\n' > /etc/systemd/journald.conf.d/fjmv.conf
+systemctl restart systemd-journald 2>/dev/null || true
+cat > /usr/local/sbin/fjmv-logguard.sh <<'EOF'
+#!/bin/sh
+# Si un log crece sin control (p.ej. driver WiFi spameando), recórtalo a 0.
+for f in /var/log/syslog /var/log/kern.log /var/log/messages /var/log/daemon.log /var/log/fjmv.log; do
+  [ -f "$f" ] || continue
+  sz=$(stat -c%s "$f" 2>/dev/null || echo 0)
+  [ "$sz" -gt 104857600 ] && : > "$f"   # > 100MB -> truncar
+done
+EOF
+chmod +x /usr/local/sbin/fjmv-logguard.sh
+cat > /etc/systemd/system/fjmv-logguard.service <<'EOF'
+[Unit]
+Description=FJMV recorta logs gigantes (anti disco lleno)
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/fjmv-logguard.sh
+EOF
+cat > /etc/systemd/system/fjmv-logguard.timer <<'EOF'
+[Unit]
+Description=FJMV logguard cada 30 min
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=30min
+[Install]
+WantedBy=timers.target
+EOF
+systemctl daemon-reload
+systemctl enable --now fjmv-logguard.timer 2>/dev/null || true
+
+echo "[*] Forzar modo ligero en el bridge (override del servicio)..."
+mkdir -p /etc/systemd/system/fjmv-camara.service.d
+printf '[Service]\nEnvironment=FJMV_LITE=1\nEnvironment=PYTHONUNBUFFERED=1\n' \
+  > /etc/systemd/system/fjmv-camara.service.d/lite.conf
+systemctl daemon-reload
+
 echo "[*] Actualizando código y reiniciando el bridge (modo ligero automático)..."
 cd /opt/fjmv-pi && git fetch -q && git reset --hard origin/main >/dev/null
 systemctl restart fjmv-camara fjmv-agent
