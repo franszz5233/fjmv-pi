@@ -44,17 +44,25 @@ class CloudPusher:
             threading.Thread(target=self._send_frame, args=(jpeg, people, active),
                              daemon=True).start()
 
-    def heartbeat(self, people, active, cam_ok, mac="", ip="", ms=-1):
-        """Latido (hilo del puente): viaja SIEMPRE con cam_ok + MAC + IP + latencia."""
+    def heartbeat(self, people, active, cam_ok, mac="", ip="", ms=-1, health=None):
+        """Latido (hilo del puente): viaja SIEMPRE con cam_ok + MAC + IP + latencia
+        + salud del equipo (temp/throttle/mem/wifi/uptime) para el log de la app."""
         if not self.enabled:
             return
+        p = {"cam": self.cam_id, "name": self.name, "people": people,
+             "together": 1 if active else 0, "status": 1,
+             "camok": 1 if cam_ok else 0, "mac": mac, "ip": ip, "ms": ms}
+        if health:
+            for k in ("temp", "thr", "mem", "up", "load", "sig"):
+                if health.get(k) is not None:
+                    p[k] = health[k]
+            for k in ("uv_now", "thr_now", "uv_ever", "thr_ever"):
+                if health.get(k):
+                    p[k] = 1
         try:
             r = requests.post(
                 f"{self.base}/api/camara/ingest/snapshot",
-                params={"cam": self.cam_id, "name": self.name, "people": people,
-                        "together": 1 if active else 0, "status": 1,
-                        "camok": 1 if cam_ok else 0, "mac": mac, "ip": ip, "ms": ms},
-                headers=self._hdr(), timeout=5)
+                params=p, headers=self._hdr(), timeout=5)
             j = r.json() or {}
             self.want_live = bool(j.get("live"))
             if j.get("intervalo"):

@@ -138,7 +138,12 @@ class AIStream(CameraStream):
         self._last_faces = []
         self._det_started = False
         self._hb_started = False
+        self._wd_started = False
         self._cam_mac = ""
+        self._alive_ts = time.time()      # watchdog: última señal de vida del bucle
+        self._watchdog_secs = 90          # si el bucle no respira en 90s -> reinicia proceso
+        self._health = {}                 # telemetría (temp, throttle, mem, wifi, uptime)
+        self._health_ts = 0.0
 
         # ---- nube ----
         self.cloud = None
@@ -345,10 +350,71 @@ class AIStream(CameraStream):
                 ms = -1
         return ip, self._cam_mac, ms
 
+    def _read_health(self):
+        """Telemetría del equipo (Raspberry): temp °C, throttling, RAM, uptime, wifi.
+        Best-effort: lo que no exista, se omite. Detecta sobrecalentamiento/bajo voltaje."""
+        h = {}
+        # temperatura CPU
+        try:
+            with open("/sys/class/thermal/thermal_zone0/temp") as f:
+                h["temp"] = round(int(f.read().strip()) / 1000.0, 1)
+        except Exception:
+            pass
+        # throttling / bajo voltaje (vcgencmd) -> hex con flags
+        try:
+            import subprocess
+            out = subprocess.run(["vcgencmd", "get_throttled"], capture_output=True,
+                                 text=True, timeout=3).stdout.strip()
+            mm = re.search(r"throttled=0x([0-9a-fA-F]+)", out)
+            if mm:
+                v = int(mm.group(1), 16)
+                h["thr"] = v
+                h["uv_now"] = bool(v & 0x1)        # bajo voltaje AHORA
+                h["thr_now"] = bool(v & 0x4)       # throttling AHORA
+                h["uv_ever"] = bool(v & 0x10000)   # hubo bajo voltaje
+                h["thr_ever"] = bool(v & 0x40000)  # hubo throttling
+        except Exception:
+            pass
+        # memoria usada %
+        try:
+            mt = ma = 0
+            with open("/proc/meminfo") as f:
+                for ln in f:
+                    if ln.startswith("MemTotal"):
+                        mt = int(ln.split()[1])
+                    elif ln.startswith("MemAvailable"):
+                        ma = int(ln.split()[1])
+            if mt:
+                h["mem"] = round((mt - ma) * 100.0 / mt)
+        except Exception:
+            pass
+        # uptime (s) y carga
+        try:
+            with open("/proc/uptime") as f:
+                h["up"] = int(float(f.read().split()[0]))
+        except Exception:
+            pass
+        try:
+            h["load"] = round(os.getloadavg()[0], 2)
+        except Exception:
+            pass
+        # señal wifi (dBm) de /proc/net/wireless
+        try:
+            with open("/proc/net/wireless") as f:
+                for ln in f.readlines()[2:]:
+                    parts = ln.split()
+                    if parts:
+                        h["sig"] = int(float(parts[3].rstrip(".")))  # nivel dBm
+                        break
+        except Exception:
+            pass
+        return h
+
     def _heartbeat_loop(self):
         """Latido independiente: aunque la cámara se caiga, sigue avisando a la nube
-        (cam_ok, mac, ip, calidad de enlace) -> la app pinta estado/IP/señal."""
+        (cam_ok, mac, ip, calidad de enlace, salud del equipo) -> la app pinta todo."""
         last_net = 0.0
+        last_health = 0.0
         ip = mac = ""
         ms = -1
         while self.running:
@@ -356,23 +422,51 @@ class AIStream(CameraStream):
             if now - last_net >= 5:
                 last_net = now
                 ip, mac, ms = self._cam_net()
+            if now - last_health >= 10:        # salud cada 10s (es algo pesada)
+                last_health = now
+                try:
+                    self._health = self._read_health()
+                    self._health_ts = now
+                except Exception:
+                    pass
             if self.cloud:
                 try:
                     self.cloud.heartbeat(self.people, self.together, self.connected,
-                                         mac, ip, ms)
+                                         mac, ip, ms, self._health)
                 except Exception:
                     pass
             time.sleep(1.0)
+
+    def _watchdog_loop(self):
+        """Backstop: si el bucle de captura se cuelga (no respira en _watchdog_secs),
+        mata el proceso. systemd (Restart=always) lo levanta limpio en segundos.
+        Recupera de CUALQUIER bloqueo (red, RTSP, memoria) sin tocar nada físico."""
+        import os as _os
+        while self.running:
+            time.sleep(10)
+            stuck = time.time() - self._alive_ts
+            if stuck > self._watchdog_secs:
+                print(f"  [WATCHDOG] bucle colgado {int(stuck)}s -> reinicio del proceso",
+                      flush=True)
+                _os._exit(1)
 
     def _loop(self):
         self._init_models()
         if self.cloud and not self._hb_started:
             self._hb_started = True
             threading.Thread(target=self._heartbeat_loop, daemon=True).start()
+        if not self._wd_started:
+            self._wd_started = True
+            threading.Thread(target=self._watchdog_loop, daemon=True).start()
         import os as _os
-        _os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", "rtsp_transport;tcp")
+        # CRÍTICO: stimeout = timeout de socket (microseg). Sin esto, cap.grab() se
+        # BLOQUEA PARA SIEMPRE si la red/cámara se traba (causa del cuelgue tras horas).
+        # Con stimeout, grab() falla -> entra la reconexión en vez de colgarse.
+        _os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = (
+            "rtsp_transport;tcp|stimeout;15000000|max_delay;5000000|reorder_queue_size;0")
 
         while self.running:
+            self._alive_ts = time.time()     # vida: el bucle externo está girando
             if not self.url:
                 self._set(self._placeholder("sin URL — configura config.json"))
                 time.sleep(1.0); continue
@@ -408,6 +502,7 @@ class AIStream(CameraStream):
                         break
                     time.sleep(0.02); continue
                 fails = 0
+                self._alive_ts = time.time()  # vida: llegan frames de la cámara
                 now = time.time()
                 if now - last_live < live_dt:
                     continue                 # vivo a live_fps -> fluido

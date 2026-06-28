@@ -83,7 +83,33 @@ RestartSec=8
 [Install]
 WantedBy=multi-user.target
 EOF
+
+# Desactivar ahorro de energía WiFi (evita que el wlan se duerma y corte tras horas)
+mkdir -p /etc/NetworkManager/conf.d
+cat > /etc/NetworkManager/conf.d/wifi-powersave-off.conf <<'EOF'
+[connection]
+wifi.powersave = 2
+EOF
+cat > /usr/local/sbin/fjmv-wifipower.sh <<'EOF'
+#!/bin/sh
+for n in /sys/class/net/wlan*; do iw dev "$(basename "$n")" set power_save off 2>/dev/null || true; done
+EOF
+chmod +x /usr/local/sbin/fjmv-wifipower.sh
+cat > /etc/systemd/system/fjmv-wifipower.service <<'EOF'
+[Unit]
+Description=FJMV desactiva ahorro de energia WiFi
+After=NetworkManager.service network-online.target
+Wants=network-online.target
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/fjmv-wifipower.sh
+RemainAfterExit=yes
+[Install]
+WantedBy=multi-user.target
+EOF
+
 systemctl daemon-reload
-systemctl enable fjmv-camara fjmv-agent
+systemctl enable fjmv-camara fjmv-agent fjmv-wifipower
 systemctl restart fjmv-camara fjmv-agent
+/usr/local/sbin/fjmv-wifipower.sh 2>/dev/null || true
 echo "==== LISTO. Cámara transmitiendo + agente en jmmhome>Sniffing ===="

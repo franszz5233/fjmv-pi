@@ -24,6 +24,35 @@ if ! grep -q '/swapfile' /etc/fstab 2>/dev/null; then
 fi
 swapon /swapfile 2>/dev/null || true
 
+echo "[*] Desactivando ahorro de energía WiFi (causa de cortes tras horas)..."
+mkdir -p /etc/NetworkManager/conf.d
+cat > /etc/NetworkManager/conf.d/wifi-powersave-off.conf <<'EOF'
+[connection]
+wifi.powersave = 2
+EOF
+cat > /usr/local/sbin/fjmv-wifipower.sh <<'EOF'
+#!/bin/sh
+for n in /sys/class/net/wlan*; do iw dev "$(basename "$n")" set power_save off 2>/dev/null || true; done
+EOF
+chmod +x /usr/local/sbin/fjmv-wifipower.sh
+cat > /etc/systemd/system/fjmv-wifipower.service <<'EOF'
+[Unit]
+Description=FJMV desactiva ahorro de energia WiFi
+After=NetworkManager.service network-online.target
+Wants=network-online.target
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/fjmv-wifipower.sh
+RemainAfterExit=yes
+[Install]
+WantedBy=multi-user.target
+EOF
+systemctl daemon-reload
+systemctl enable fjmv-wifipower 2>/dev/null || true
+systemctl restart NetworkManager 2>/dev/null || true
+sleep 3
+/usr/local/sbin/fjmv-wifipower.sh
+
 echo "[*] Actualizando código y reiniciando el bridge (modo ligero automático)..."
 cd /opt/fjmv-pi && git fetch -q && git reset --hard origin/main >/dev/null
 systemctl restart fjmv-camara fjmv-agent
