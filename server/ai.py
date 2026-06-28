@@ -514,6 +514,8 @@ class AIStream(CameraStream):
                 self._alive_ts = time.time()  # vida: llegan frames de la cámara
                 now = time.time()
                 if now - last_live < live_dt:
+                    if self.lite:
+                        time.sleep(self.grab_sleep)  # no decodificar cada frame en Zero 2 W
                     continue                 # vivo a live_fps -> fluido
                 last_live = now
                 ok, frame = cap.retrieve()
