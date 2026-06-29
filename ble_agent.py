@@ -99,28 +99,92 @@ def hello():
 
 
 # ============================ Ejecución de comandos BLE ============================
-async def do_scan(seconds):
-    if not BLE_OK:
-        return {"error": f"bleak no disponible: {BLE_ERR[:140]}"}
-    devices = []
+def _sh(cmd, timeout=8):
+    """Corre un comando de shell y devuelve stdout+stderr (para diagnóstico)."""
     try:
-        found = await BleakScanner.discover(timeout=float(seconds), return_adv=True)
+        r = subprocess.run(cmd, shell=True, capture_output=True, text=True,
+                           timeout=timeout, executable="/bin/bash")
+        return ((r.stdout or "") + (r.stderr or "")).strip()
     except Exception as e:  # noqa: BLE001
-        return {"error": f"scan falló: {str(e)[:160]}"}
-    for addr, (dev, adv) in found.items():
-        uuids = list(getattr(adv, "service_uuids", []) or [])
-        mfg = list((getattr(adv, "manufacturer_data", {}) or {}).keys())
-        name = getattr(adv, "local_name", None) or getattr(dev, "name", None) or ""
+        return f"(error: {e})"
+
+
+async def do_scan(seconds, active=True):
+    """Escaneo robusto vía callback de detección (capta TODO anuncio, incluso
+    no-conectables, y funciona en cualquier versión de bleak). Reintenta encender
+    la radio si hace falta."""
+    if not BLE_OK:
+        return {"error": f"bleak no disponible: {BLE_ERR[:140]}",
+                "hint": "Corre instalar-ble.sh en la Pi (pip install bleak)."}
+    # Asegura radio encendida antes de escanear.
+    _sh("rfkill unblock bluetooth 2>/dev/null; hciconfig hci0 up 2>/dev/null", timeout=5)
+    seen = {}
+
+    def _cb(dev, adv):
+        try:
+            seen[dev.address] = (dev, adv)
+        except Exception:
+            pass
+
+    try:
+        kw = {"detection_callback": _cb}
+        try:
+            scanner = BleakScanner(scanning_mode=("active" if active else "passive"), **kw)
+        except TypeError:
+            scanner = BleakScanner(**kw)   # versiones viejas sin scanning_mode
+        await scanner.start()
+        await asyncio.sleep(float(seconds))
+        await scanner.stop()
+    except Exception as e:  # noqa: BLE001
+        # Último recurso: API clásica discover().
+        try:
+            found = await BleakScanner.discover(timeout=float(seconds))
+            for dev in found:
+                seen[dev.address] = (dev, None)
+        except Exception as e2:  # noqa: BLE001
+            return {"error": f"scan falló: {str(e)[:120]} / {str(e2)[:120]}",
+                    "diag": do_diag(), "devices": []}
+
+    devices = []
+    for addr, (dev, adv) in seen.items():
+        uuids = list(getattr(adv, "service_uuids", []) or []) if adv else []
+        mfg = list((getattr(adv, "manufacturer_data", {}) or {}).keys()) if adv else []
+        name = (getattr(adv, "local_name", None) if adv else None) or getattr(dev, "name", None) or ""
+        rssi = getattr(adv, "rssi", None) if adv else getattr(dev, "rssi", None)
         devices.append({
-            "mac": addr,
-            "name": name,
-            "rssi": getattr(adv, "rssi", None),
-            "uuids": uuids,
-            "mfg": mfg,
+            "mac": addr, "name": name, "rssi": rssi,
+            "uuids": uuids, "mfg": mfg,
             "kind": _guess_kind(name, uuids, mfg),
         })
     devices.sort(key=lambda d: (d["kind"] == "?", -(d["rssi"] or -999)))
-    return {"devices": devices, "count": len(devices), "seconds": seconds}
+    out = {"devices": devices, "count": len(devices), "seconds": seconds}
+    if not devices:
+        # Nada encontrado → adjunta diagnóstico para entender por qué.
+        out["diag"] = do_diag()
+        out["hint"] = ("0 dispositivos. Si la radio está OK, ACTIVA la chapa "
+                       "(tócala/pulsa el teclado) durante el escaneo: muchas "
+                       "cerraduras solo anuncian BLE al despertar.")
+    return out
+
+
+def do_diag():
+    """Diagnóstico del subsistema Bluetooth de la Pi (sin depender de bleak)."""
+    d = {
+        "bleak_ok": BLE_OK,
+        "bleak_err": "" if BLE_OK else BLE_ERR[:200],
+        "rfkill": _sh("rfkill list bluetooth 2>/dev/null || rfkill list 2>/dev/null"),
+        "hciconfig": _sh("hciconfig -a 2>/dev/null"),
+        "adapters": _sh("ls /sys/class/bluetooth 2>/dev/null"),
+        "bt_service": _sh("systemctl is-active bluetooth 2>/dev/null"),
+        "btmgmt": _sh("bluetoothctl show 2>/dev/null | head -20"),
+        "dmesg_bt": _sh("dmesg 2>/dev/null | grep -iE 'blue|hci|brcm|firmware' | tail -12"),
+    }
+    try:
+        import bleak as _b
+        d["bleak_version"] = getattr(_b, "__version__", "?")
+    except Exception:
+        d["bleak_version"] = "(no instalado)"
+    return d
 
 
 def _svc_summary(client):
@@ -268,6 +332,8 @@ def run_cmd(c):
     """Despacha un comando tipado y devuelve un dict serializable."""
     t = c.get("type")
     try:
+        if t == "diag":
+            return do_diag()
         if t == "scan":
             return asyncio.run(do_scan(int(c.get("seconds", 8))))
         if t == "probe":
