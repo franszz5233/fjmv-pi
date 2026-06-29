@@ -23,10 +23,10 @@ systemctl start bluetooth 2>/dev/null || true
 rfkill unblock bluetooth 2>/dev/null || true
 hciconfig hci0 up 2>/dev/null || true
 
-# Reutiliza el token/PI del agente de sniffing si existe (mismo .service).
-BLE_TOKEN="${BLE_TOKEN:-$(grep -h SNIFF_TOKEN /etc/systemd/system/fjmv-agent.service 2>/dev/null | head -1 | cut -d= -f2)}"
+# El relé de jmhome acepta tanto fjmv-ble-5233 como el token de sniffing, así que
+# usamos el default y no hay riesgo de desajuste.
 BLE_TOKEN="${BLE_TOKEN:-fjmv-ble-5233}"
-PI_ID="${PI_ID:-$(grep -h '^Environment=PI_ID' /etc/systemd/system/fjmv-agent.service 2>/dev/null | head -1 | cut -d= -f3)}"
+PI_ID="${PI_ID:-$(grep -h '^Environment=PI_ID=' /etc/systemd/system/fjmv-agent.service 2>/dev/null | head -1 | cut -d= -f3)}"
 PI_ID="${PI_ID:-pi-fjmv}"
 JMHOME="${JMHOME:-https://jmhome.fly.dev}"
 
