@@ -22,6 +22,8 @@ Config por variables de entorno (ver el .service):
 Requiere: bleak (pip), BlueZ + bluetooth encendido (rfkill unblock bluetooth).
 """
 import os
+import sys
+import json
 import socket
 import asyncio
 import subprocess
@@ -350,6 +352,76 @@ def run_cmd(c):
         return {"error": f"excepción: {str(e)[:180]}"}
 
 
+def scan_bluetoothctl(seconds):
+    """Escaneo de respaldo SIN bleak, usando bluetoothctl (parte de BlueZ).
+    Devuelve el mismo formato que do_scan. Útil si bleak no está instalado."""
+    _sh("rfkill unblock bluetooth 2>/dev/null; hciconfig hci0 up 2>/dev/null; "
+        "systemctl start bluetooth 2>/dev/null", timeout=6)
+    # Enciende escaneo, espera, apaga, lista dispositivos vistos.
+    _sh(f"bluetoothctl --timeout {int(seconds)} scan on", timeout=int(seconds) + 6)
+    listing = _sh("bluetoothctl devices", timeout=8)
+    devices = []
+    for line in (listing or "").splitlines():
+        line = line.strip()
+        if not line.startswith("Device "):
+            continue
+        parts = line.split(" ", 2)
+        mac = parts[1] if len(parts) > 1 else ""
+        name = parts[2] if len(parts) > 2 else ""
+        if not mac:
+            continue
+        devices.append({"mac": mac, "name": name, "rssi": None,
+                        "uuids": [], "mfg": [], "kind": _guess_kind(name, [], [])})
+    out = {"devices": devices, "count": len(devices), "seconds": seconds,
+           "via": "bluetoothctl"}
+    if not devices:
+        out["diag"] = do_diag()
+        out["hint"] = ("0 dispositivos (bluetoothctl). Activa la chapa durante el "
+                       "escaneo; muchas cerraduras solo anuncian BLE al despertar.")
+    return out
+
+
+def cli_main(argv):
+    """Modo CLI: imprime el resultado como 'BLEJSON:<json>' para que jmhome lo
+    lea a través del relé de Sniffing. Uso:
+       python3 ble_agent.py scan [segundos]
+       python3 ble_agent.py diag
+       python3 ble_agent.py probe <mac>
+       python3 ble_agent.py test  <mac> [auto|ttlock|tuya] [listen] [write_hex]
+       python3 ble_agent.py raw   <mac> <char> <write_hex> [notify_char] [listen]
+    """
+    cmd = argv[0]
+    try:
+        if cmd == "diag":
+            res = do_diag()
+        elif cmd == "scan":
+            secs = int(argv[1]) if len(argv) > 1 else 8
+            if BLE_OK:
+                res = asyncio.run(do_scan(secs))
+                # Si bleak no vio nada, intenta el respaldo nativo.
+                if not res.get("devices"):
+                    fb = scan_bluetoothctl(secs)
+                    if fb.get("devices"):
+                        res = fb
+            else:
+                res = scan_bluetoothctl(secs)
+        elif cmd == "probe":
+            res = asyncio.run(do_probe(argv[1]))
+        elif cmd == "test":
+            res = asyncio.run(do_test(argv[1], argv[2] if len(argv) > 2 else "auto",
+                                      int(argv[3]) if len(argv) > 3 else 5,
+                                      argv[4] if len(argv) > 4 else ""))
+        elif cmd == "raw":
+            res = asyncio.run(do_raw(argv[1], argv[2], argv[3] if len(argv) > 3 else "",
+                                     argv[4] if len(argv) > 4 else "",
+                                     int(argv[5]) if len(argv) > 5 else 4))
+        else:
+            res = {"error": f"comando CLI desconocido: {cmd}"}
+    except Exception as e:  # noqa: BLE001
+        res = {"error": f"excepción CLI: {str(e)[:180]}"}
+    print("BLEJSON:" + json.dumps(res))
+
+
 def main():
     print(f"[ble_agent] PI_ID={PI_ID} -> {BASE}  BLE_OK={BLE_OK}")
     if not BLE_OK:
@@ -380,4 +452,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    if len(sys.argv) > 1:
+        cli_main(sys.argv[1:])   # modo CLI (lo invoca jmhome por el relé Sniffing)
+    else:
+        main()                   # modo daemon (relé BLE propio)
