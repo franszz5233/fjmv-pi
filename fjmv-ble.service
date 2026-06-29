@@ -1,0 +1,16 @@
+[Unit]
+Description=FJMV agente Bluetooth (BLE) — chapas IoT vía relé jmhome
+After=network-online.target bluetooth.target
+Wants=network-online.target bluetooth.target
+[Service]
+WorkingDirectory=/opt/fjmv-pi
+Environment=JMHOME=https://jmhome.fly.dev
+Environment=PI_ID=pi-fjmv
+Environment=PI_NAME=Raspberry FJMV
+Environment=BLE_TOKEN=fjmv-ble-5233
+ExecStartPre=-/usr/sbin/rfkill unblock bluetooth
+ExecStart=/usr/bin/python3 /opt/fjmv-pi/ble_agent.py
+Restart=always
+RestartSec=8
+[Install]
+WantedBy=multi-user.target

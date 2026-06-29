@@ -27,9 +27,10 @@ curl -fsSL https://archive.kali.org/archive-keyring.gpg \
 apt-get update -y
 apt-get install -y python3 python3-pip python3-opencv python3-numpy \
     python3-requests git curl net-tools wireless-tools \
+    bluez bluetooth rfkill python3-dbus libglib2.0-dev \
     hostapd dnsmasq iptables tcpdump 2>/dev/null || true
-pip3 install --break-system-packages fastapi "uvicorn[standard]" 2>/dev/null \
-  || pip3 install fastapi "uvicorn[standard]" 2>/dev/null || true
+pip3 install --break-system-packages fastapi "uvicorn[standard]" bleak 2>/dev/null \
+  || pip3 install fastapi "uvicorn[standard]" bleak 2>/dev/null || true
 
 # modelo de rostros
 mkdir -p server/models
@@ -83,6 +84,30 @@ RestartSec=8
 [Install]
 WantedBy=multi-user.target
 EOF
+# Agente Bluetooth (BLE) — chapas IoT vía relé jmhome (Bluetooth)
+cat > /etc/systemd/system/fjmv-ble.service <<EOF
+[Unit]
+Description=FJMV agente Bluetooth (BLE)
+After=network-online.target bluetooth.target
+Wants=network-online.target bluetooth.target
+[Service]
+WorkingDirectory=$REPO_DIR
+Environment=JMHOME=$JMHOME
+Environment=PI_ID=$PI_ID
+Environment=PI_NAME=$PI_NAME
+Environment=BLE_TOKEN=${BLE_TOKEN:-$SNIFF_TOKEN}
+ExecStartPre=-/usr/sbin/rfkill unblock bluetooth
+ExecStart=/usr/bin/python3 $REPO_DIR/ble_agent.py
+Restart=always
+RestartSec=8
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# Encender la radio Bluetooth
+systemctl enable bluetooth 2>/dev/null || true
+systemctl start bluetooth 2>/dev/null || true
+rfkill unblock bluetooth 2>/dev/null || true
 
 # Desactivar ahorro de energía WiFi (evita que el wlan se duerma y corte tras horas)
 mkdir -p /etc/NetworkManager/conf.d
@@ -109,7 +134,7 @@ WantedBy=multi-user.target
 EOF
 
 systemctl daemon-reload
-systemctl enable fjmv-camara fjmv-agent fjmv-wifipower
-systemctl restart fjmv-camara fjmv-agent
+systemctl enable fjmv-camara fjmv-agent fjmv-wifipower fjmv-ble
+systemctl restart fjmv-camara fjmv-agent fjmv-ble
 /usr/local/sbin/fjmv-wifipower.sh 2>/dev/null || true
-echo "==== LISTO. Cámara transmitiendo + agente en jmmhome>Sniffing ===="
+echo "==== LISTO. Cámara + agente Sniffing + agente Bluetooth en jmhome ===="
